@@ -6,9 +6,10 @@ control var: motor throttle (~ thrust)
 '''
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 TARGET = 10
-TIME_STEP = 1 #secs
+TIME_STEP = .1 #secs
 SIM_TIME = 100 #secs
 MASS = 2 #kg
 GRAV_ACCEL = 10 #m/s^2
@@ -21,48 +22,108 @@ def throttle2thrust(throttle):
     #100% throttle = 50 N thrust
     return 0.5*throttle
 
-clamp = lambda x: max(0, min(100,x))
+clamp = lambda x,mn,mx: max(mn, min(mx,x))
 class Controller:
     def __init__(self):
-        self.kp = 0.5
+        self.kp = 2
+        self.ki = 0.0
+        self.cumul_err = 0
     
     def run(self, target, current):
         '''returns throttle %'''
         err = target-current #positive if lower
+        self.cumul_err += TIME_STEP*err
+        self.cumul_err = clamp(self.cumul_err, -50,50)
 
-        return clamp(self.kp*err + 40)
+        return clamp(self.kp*err + self.ki*self.cumul_err, 0, 100)
 
+t_vals=[]
 alt_hist=[]
 vel_hist=[]
 throttle_hist=[]
-con=Controller()
-t=0
-alt=0
-vel=0
-while t<SIM_TIME:
-    throttle = con.run(TARGET,alt)
-    thrust = throttle2thrust(throttle)
-    net_force = thrust-(MASS*GRAV_ACCEL)
-    accel = net_force/MASS
+cumulerr_hist=[]
+def simulate(controller):
+    alt_hist.clear()
+    vel_hist.clear()
+    throttle_hist.clear()
+    cumulerr_hist.clear()
 
-    #double integrate (basically)
-    vel += TIME_STEP*accel
-    alt += TIME_STEP*vel
+    con = Controller()
+    con.kp = controller.kp
+    con.ki = controller.ki
+    t = 0
+    alt = 0
+    vel = 0
+    while t < SIM_TIME:
+        throttle = con.run(TARGET, alt)
+        thrust = throttle2thrust(throttle)
+        net_force = thrust - (MASS*GRAV_ACCEL)
+        accel = net_force / MASS
 
-    alt_hist.append(alt)
-    vel_hist.append(vel)
-    throttle_hist.append(throttle)
+        vel += TIME_STEP*accel
+        alt += TIME_STEP*vel
 
-    t += TIME_STEP
+        t_vals.append(t)
+        alt_hist.append(alt)
+        vel_hist.append(vel)
+        throttle_hist.append(throttle)
+        cumulerr_hist.append(con.cumul_err)
 
-fig, (ax1,ax2,ax3) = plt.subplots(nrows=3, ncols=1, 
-    sharex=True,) # layout="constrained"
-ax1.plot(alt_hist)
-ax1.set_title("altitude")
-ax2.plot(vel_hist)
-ax2.set_title("velocity")
-ax3.plot(throttle_hist)
-ax3.set_title("throttle")
+        t += TIME_STEP
 
-plt.tight_layout()
-plt.show()
+
+def draw(controller):
+    simulate(controller)
+
+    plt.close('all')
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(nrows=4, ncols=1, 
+                                        sharex=True,
+                                        figsize=(9,9))
+    l1, = ax1.plot(t_vals, alt_hist)
+    ax1.set_title('altitude')
+    l2, = ax2.plot(t_vals, vel_hist)
+    ax2.set_title('velocity')
+    l3, = ax3.plot(t_vals, throttle_hist)
+    ax3.set_title('throttle')
+    l4, = ax4.plot(t_vals, cumulerr_hist)
+    ax4.set_title('cumul_err')
+
+    plt.subplots_adjust(left=0.1, right=0.9, bottom=0.2, top=0.95)
+
+    # sliders
+    from matplotlib.widgets import Slider
+
+    ax_kp = plt.axes([0.1, 0.12, 0.7, 0.03]) #left,bottom,width,height
+    ax_ki = plt.axes([0.1, 0.06, 0.7, 0.03])
+
+    s_kp = Slider(ax_kp, 'kp', 0.0, 10.0, valinit=controller.kp)
+    s_ki = Slider(ax_ki, 'ki', 0, 1.0, valinit=controller.ki)
+
+    def _update(val):
+        controller.kp = s_kp.val
+        controller.ki = s_ki.val
+        simulate(controller)
+        l1.set_ydata(alt_hist)
+        l2.set_ydata(vel_hist)
+        l3.set_ydata(throttle_hist)
+        l4.set_ydata(cumulerr_hist)
+        # adjust xlimits and ylimits to new data
+        n = len(alt_hist)
+        for ax, data in ((ax1, alt_hist), 
+                        (ax2, vel_hist), 
+                        (ax3, throttle_hist)
+                        ):
+            ymin = min(data)-2
+            ymax = max(data)+2
+            ax.set_ylim(ymin, ymax)
+        fig.canvas.draw_idle()
+
+    s_kp.on_changed(_update)
+    s_ki.on_changed(_update)
+
+    plt.show()
+
+
+if __name__ == '__main__':
+    controller = Controller()
+    draw(controller)
